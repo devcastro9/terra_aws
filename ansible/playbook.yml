@@ -1,0 +1,104 @@
+---
+- name: Configurar y desplegar Flask app
+  hosts: app
+  become: true
+  vars:
+    app_user: appsvc
+    app_dir: /opt/flaskapp
+    app_port: 5000
+  tasks:
+    - name: Actualizar paquetes
+      yum:
+        name: "*"
+        state: latest
+
+    - name: Instalar dependencias del sistema
+      yum:
+        name:
+          - python3
+          - python3-pip
+          - git
+        state: present
+
+    - name: Crear usuario de aplicación
+      user:
+        name: "{{ app_user }}"
+        system: yes
+        create_home: no
+
+    - name: Crear directorio de la app
+      file:
+        path: "{{ app_dir }}"
+        state: directory
+        owner: "{{ app_user }}"
+        group: "{{ app_user }}"
+        mode: "0755"
+
+    - name: Copiar archivos de la app
+      copy:
+        src: "../app/"
+        dest: "{{ app_dir }}"
+        owner: "{{ app_user }}"
+        group: "{{ app_user }}"
+        mode: "0644"
+
+    - name: Instalar requerimientos con pip
+      pip:
+        executable: pip3
+        requirements: "{{ app_dir }}/requirements.txt"
+
+    - name: Crear servicio systemd para gunicorn
+      copy:
+        dest: /etc/systemd/system/flaskapp.service
+        content: |
+          [Unit]
+          Description=Flask App with Gunicorn
+          After=network.target
+
+          [Service]
+          User={{ app_user }}
+          Group={{ app_user }}
+          WorkingDirectory={{ app_dir }}
+          ExecStart=/usr/bin/gunicorn -w 2 -b 0.0.0.0:{{ app_port }} main:app
+          Restart=always
+
+          [Install]
+          WantedBy=multi-user.target
+      notify: Restart flaskapp
+
+    - name: Abrir puerto en firewalld (si está presente)
+      service_facts:
+      register: services
+
+    - name: Habilitar firewalld y abrir puerto
+      when: "'firewalld.service' in services.ansible_facts.services"
+      block:
+        - name: Instalar firewalld
+          yum:
+            name: firewalld
+            state: present
+        - name: Habilitar firewalld
+          service:
+            name: firewalld
+            state: started
+            enabled: true
+        - name: Abrir puerto de la app
+          firewalld:
+            port: "{{ app_port }}/tcp"
+            permanent: true
+            state: enabled
+            immediate: true
+
+  handlers:
+    - name: Restart flaskapp
+      systemd:
+        name: flaskapp
+        state: restarted
+        daemon_reload: true
+
+  post_tasks:
+    - name: Habilitar servicio al arranque
+      systemd:
+        name: flaskapp
+        state: started
+        enabled: true
