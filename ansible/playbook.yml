@@ -1,4 +1,3 @@
----
 - name: Configurar y desplegar Flask app
   hosts: app
   become: true
